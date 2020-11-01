@@ -168,6 +168,12 @@ def life_experience(model, continuum, x_te, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Continuum learning')
 
+    # Woody: extra args for caml
+    parser.add_argument('--caml_priority', type=str, default='loss',
+                        help='how to prioritize sampling in caml')
+    parser.add_argument('--softmax_temperature', type=float, default=1.0,
+                        help='temperature for softmax in replay buffer sampling')
+
     # model details
     parser.add_argument('--model', type=str, default='single',
                         help='model to train')
