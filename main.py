@@ -32,6 +32,11 @@ def load_datasets(args):
     for i in range(len(d_tr)):
         n_outputs = max(n_outputs, d_tr[i][2].max())
         n_outputs = max(n_outputs, d_te[i][2].max())
+    # Woody: Dataset summary: 60,000 examples of each task for train. 10,000 of each task for test. MNIST images are flattened with shape 784.
+    # Woody: d_te[insert task number][0] gives you the rotation used to create the dataset, d_te[insert task number][1] gives the inputs, and d_te[insert task number][2] gives the labels
+    # Woody: Remember labels in MNIST are in [0, 9], so a random baseline gets 10% accuracy. 
+    #print(d_te[0][1].shape) # Woody: Rotations: torch.Size([10000, 784])
+    #print(d_tr[0][1].shape) # Woody: Rotations: torch.Size([60000, 784])
     return d_tr, d_te, n_inputs, n_outputs + 1, len(d_tr)
 
 
@@ -68,6 +73,7 @@ class Continuum:
                 self.permutation += task_p
 
         self.length = len(self.permutation)
+        print(self.length)
         self.current = 0
 
     def __iter__(self):
@@ -127,14 +133,15 @@ def eval_tasks(model, tasks, args):
 
 
 def life_experience(model, continuum, x_te, args):
-    result_a = []
-    result_t = []
+    result_a = [] # Woody: result_a is a list of lists of average accuracy for each task. 
+    result_t = [] # Woody: result_t is a list of the current task indices
 
     current_task = 0
     time_start = time.time()
 
     for (i, (x, t, y)) in enumerate(continuum):
         if(((i % args.log_every) == 0) or (t != current_task)):
+            print(i) # Woody debugging
             result_a.append(eval_tasks(model, x_te, args))
             result_t.append(current_task)
             current_task = t
