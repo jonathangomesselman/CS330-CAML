@@ -72,12 +72,15 @@ class Net(nn.Module):
         bxs = [xi]
         bys = [yi]
         
+        # Woody: add indices_sampled as a variable that keeps track of all the indices of examples in the buffer that were sampled
+        indices_sampled = []
         if len(self.M) > 0:
             order = [i for i in range(0,len(self.M))]
             osize = min(self.batchSize,len(self.M))
 
             # Woody: prioritized sampling
             curr_probabilities = self.softmax(self.priorities)
+            #print(curr_probabilities)
             for j in range(0,osize):
                 # Old uniform sampling code
                 #shuffle(order)
@@ -85,6 +88,7 @@ class Net(nn.Module):
 
                 # Woody: prioritized sampling
                 k = np.random.choice(np.arange(len(self.M)), replace=False, p=curr_probabilities) # a single index drawn from the curr_probabilities distribution
+                indices_sampled.append(k)
 
                 x,y,t = self.M[k]
                 xi = Variable(torch.from_numpy(np.array(x))).float().view(1,-1)
@@ -95,7 +99,7 @@ class Net(nn.Module):
                     yi = yi.cuda()
                 bxs.append(xi)
                 bys.append(yi)
-        return bxs,bys
+        return bxs, bys, indices_sampled
                 
 
     def observe(self, x, t, y):
@@ -110,7 +114,7 @@ class Net(nn.Module):
             for step in range(0,self.steps):                
                 weights_before = deepcopy(self.net.state_dict())
                 # Draw batch from buffer:
-                bxs,bys = self.getBatch(xi,yi,t)
+                bxs, bys, indices_sampled = self.getBatch(xi,yi,t)
                 loss = 0.0
                 for idx in range(len(bxs)):
                     self.net.zero_grad()
@@ -118,6 +122,17 @@ class Net(nn.Module):
                     by = bys[idx] 
                     prediction = self.forward(bx,0)
                     loss = self.bce(prediction,by)
+
+                    if idx != 0: # skip the idx of the current xi and yi since they are not from the replay buffer
+                        # Update replay buffer priority
+                        curr_replay_buffer_idx = indices_sampled[idx - 1]
+                        if self.caml_priority == 'loss':
+                            self.priorities[curr_replay_buffer_idx] = float(loss)
+                        elif self.caml_priority == 'newest':
+                            self.priorities[curr_replay_buffer_idx] = self.age
+                        elif self.caml_priority == 'oldest':
+                            self.priorities[curr_replay_buffer_idx] = -self.age 
+
                     loss.backward()
                     self.opt.step()
                 
