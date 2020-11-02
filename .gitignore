@@ -1,3 +1,5 @@
 *.DS_Store
 *__pycache__/
-*mnist*
+data/._mnist_rotations.pt
+data/mnist_rotations.pt
+data/mnist_rotations.tar.gz
