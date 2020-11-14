@@ -5,6 +5,11 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
+"""
+    Jonathan: Big difference in algorithm 6 is that we compute a big batch B_sk with s * k examples
+    and do the meta-update based on the final theta_sk, rather than s batches of size k and 
+    s meta-updates!
+"""
 
 import torch
 import torch.nn as nn
@@ -83,7 +88,7 @@ class Net(nn.Module):
                 bxs.append(xi)
                 bys.append(yi)
 
-        bxs.append(mxi)
+        bxs.append(mxi) # The actual example we are learning on
         bys.append(myi)
 
  

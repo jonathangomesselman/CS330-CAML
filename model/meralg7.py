@@ -5,6 +5,11 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
+"""
+    Big difference: Sample a single batch for from the replay buffer of size k-1 and include
+    the current training example. During training weight the training example with alpha * s
+    rather than just alpha
+"""
 
 import torch
 import torch.nn as nn
@@ -46,7 +51,7 @@ class Net(nn.Module):
         self.s = float(args.s)
         self.gamma = args.gamma
 
-
+        self.steps = int(args.batches_per_example)
 
         # allocate buffer
         self.M = []
@@ -75,7 +80,7 @@ class Net(nn.Module):
             order = [i for i in range(0,len(self.M))]
             osize = min(self.batchSize,len(self.M))
             for j in range(0,osize):
-                shuffle(order)
+                shuffle(order) # Why the fuck? Get a random number??
                 k = order[j]
                 x,y,t = self.M[k]
                 xi = Variable(torch.from_numpy(np.array(x))).float().view(1,-1)
@@ -92,6 +97,8 @@ class Net(nn.Module):
         by2 = []
         indexes = [ind for ind in range(len(bxs))]
         shuffle(indexes)
+        # Shuffle the batch so the current training
+        # sample is in a random location within the batch
         for index in indexes:
             if index == 0:
                 myindex = len(bx2)
@@ -109,7 +116,6 @@ class Net(nn.Module):
             yi = y[i].data.cpu().numpy()
             if self.age > 1:
                 self.net.zero_grad()
-
 
    
                 weights_before = deepcopy(self.net.state_dict())

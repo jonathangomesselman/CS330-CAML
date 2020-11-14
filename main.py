@@ -21,6 +21,7 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from metrics.metrics import confusion_matrix
+import matplotlib.pyplot as plt
 
 # continuum iterator #########################################################
 
@@ -32,6 +33,7 @@ def load_datasets(args):
     for i in range(len(d_tr)):
         n_outputs = max(n_outputs, d_tr[i][2].max())
         n_outputs = max(n_outputs, d_te[i][2].max())
+
     # Woody: Dataset summary: 60,000 examples of each task for train. 10,000 of each task for test. MNIST images are flattened with shape 784.
     # Woody: d_te[insert task number][0] gives you the rotation used to create the dataset, d_te[insert task number][1] gives the inputs, and d_te[insert task number][2] gives the labels
     # Woody: Remember labels in MNIST are in [0, 9], so a random baseline gets 10% accuracy. 
@@ -39,7 +41,9 @@ def load_datasets(args):
     #print(d_tr[0][1].shape) # Woody: Rotations: torch.Size([60000, 784])
     return d_tr, d_te, n_inputs, n_outputs + 1, len(d_tr)
 
-
+"""
+    Defines the data stream
+"""
 class Continuum:
 
     def __init__(self, data, args):
@@ -55,6 +59,7 @@ class Continuum:
 
         for t in range(n_tasks):
             N = data[t][1].size(0)
+            # Either train on all the task data or sub-sample it
             if args.samples_per_task <= 0:
                 n = N
             else:
@@ -68,6 +73,8 @@ class Continuum:
         for t in range(n_tasks):
             task_t = task_permutation[t]
             for _ in range(args.n_epochs):
+                # Create a random permutation for each epoch of the data
+                # we are using for task_t
                 task_p = [[task_t, i] for i in sample_permutations[task_t]]
                 random.shuffle(task_p)
                 self.permutation += task_p
@@ -86,7 +93,7 @@ class Continuum:
         if self.current >= self.length:
             raise StopIteration
         else:
-            ti = self.permutation[self.current][0]
+            ti = self.permutation[self.current][0] # Task index - note we are not using this for now!
             j = []
             i = 0
             while (((self.current + i) < self.length) and
@@ -96,14 +103,59 @@ class Continuum:
                 i += 1
             self.current += i
             j = torch.LongTensor(j)
+            # Get the randomly shuffled data-samples for task ti
             return self.data[ti][1][j], ti, self.data[ti][2][j]
 
 # train handle ###############################################################
 
+"""
+    Stolen from CS231N
+"""
+def compute_saliency_maps(X, y, model):
+    """
+    Compute a class saliency map using the model for images X and labels y.
 
-def eval_tasks(model, tasks, args):
+    Input:
+    - X: Input images; Tensor of shape (N, H*W)
+    - y: Labels for X; LongTensor of shape (N,)
+    - model: A pretrained CNN that will be used to compute the saliency map.
+
+    Returns:
+    - saliency: A Tensor of shape (N, H*W) giving the saliency maps for the input
+    images.
+    """
+    # Make sure the model is in "test" mode
+    model.eval()
+    
+    # Make input tensor require gradient
+    X.requires_grad_()
+    
+    ##############################################################################
+    # TODO: Implement this function. Perform a forward and backward pass through #
+    # the model to compute the gradient of the correct class score with respect  #
+    # to each input image. You first want to compute the loss over the correct   #
+    # scores (we'll combine losses across a batch by summing), and then compute  #
+    # the gradients with a backward pass.                                        #
+    ##############################################################################
+    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
+
+    scores = model(X, 0) # Not sure about the 0
+    # loss = self.bce(prediction, by)
+    # Gather just the correct scores
+    # Not sure why we did this instead of the loss!
+    scores = scores.gather(1, y.view(-1, 1),).squeeze()
+    loss = torch.sum(scores)
+    
+    loss.backward()
+    # Now actually get step
+    X_grad = X.grad
+    saliency = torch.abs(X_grad)
+    return saliency
+
+def eval_tasks(model, tasks, args, current_task):
     model.eval()
     result = []
+    mistakes = np.zeros(0)
     for i, task in enumerate(tasks):
         t = i
         x = task[1]
@@ -124,27 +176,44 @@ def eval_tasks(model, tasks, args):
                 if args.cuda:
                     xb = xb.cuda()
                 # xb = Variable(xb, volatile=True)  # torch 0.4+
+                # Get the model predictions!
                 _, pb = torch.max(model(xb, t).data.cpu(), 1, keepdim=False)
                 rt += (pb == yb).float().sum()
 
+                # Track the numbers that are incorrectly predicted
+                # Only track for tasks we has learned on!
+                if (t <= current_task):
+                    gt_wrong = yb[pb != yb].detach().numpy()
+                    mistakes = np.concatenate((mistakes, gt_wrong), axis=-1)
+
         result.append(rt / x.size(0))
 
-    return result
+    return result, mistakes
 
 
 def life_experience(model, continuum, x_te, args):
-    result_a = [] # Woody: result_a is a list of lists of average accuracy for each task. 
+    result_a = [] # Woody: result_a is a list of lists of average accuracy for each task at the speciic t!
     result_t = [] # Woody: result_t is a list of the current task indices
+    mistakes_t = [] # Jon: mistakes_t is a list of lists of the mistakes made by the model over tasks 1...t
 
     current_task = 0
     time_start = time.time()
+    
 
     for (i, (x, t, y)) in enumerate(continuum):
+        # Log if we are switching tasks!
         if(((i % args.log_every) == 0) or (t != current_task)):
             print(i) # Woody debugging
-            result_a.append(eval_tasks(model, x_te, args))
+            result, mistakes = eval_tasks(model, x_te, args, current_task)
+            mistakes_t.append(mistakes)
+            result_a.append(result)
             result_t.append(current_task)
             current_task = t
+
+            # When we switch tasks is probably the best place to keep track of
+            # the priorities for later visualization
+            if (len(model.priorities) == model.memories):
+                model.priority_tracker.append(model.priorities.copy())
 
         v_x = x.view(x.size(0), -1)
         v_y = y.long()
@@ -156,14 +225,45 @@ def life_experience(model, continuum, x_te, args):
         model.train()
         model.observe(Variable(v_x), t, Variable(v_y))
 
-    result_a.append(eval_tasks(model, x_te, args))
+    # Get the mistakes at the end of training 
+    result, mistakes = eval_tasks(model, x_te, args, current_task)
+    mistakes_t.append(mistakes)
+    result_a.append(result)
     result_t.append(current_task)
 
     time_end = time.time()
     time_spent = time_end - time_start
 
-    return torch.Tensor(result_t), torch.Tensor(result_a), time_spent
+    return torch.Tensor(result_t), torch.Tensor(result_a), time_spent, mistakes_t
 
+def visualize_priorities(priorities):
+    # Plots a curve for each memory replay t 
+    # as the priorities for that replay. Makes
+    # sure to sort the priorities.
+    for priority_t in priorities:
+        sorted_p_t = sorted(priority_t)
+        plt.plot(np.arange(len(sorted_p_t)), sorted_p_t)
+
+    plt.show()
+
+"""
+    Jon
+    ------------
+    At the end of training, show a grid of histogram plots
+    demonstrating the mistakes made on prior tasks 1,...,t at
+    the time after learning task t
+"""
+def mistakes_histogram(mistakes_t):
+    fig, ax = plt.subplots(4, 5, sharex='all', sharey='all')
+
+    for row in range(4):
+        for col in range(5):
+            counts, _ = np.histogram(mistakes_t[5 * row + col], bins=np.arange(11))
+            x = np.arange(10)
+            ax[row, col].bar(x, counts)
+            #plt.hist(mistakes, bins=np.arange(11))
+    plt.xticks(x, x)
+    plt.show()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Continuum learning')
@@ -273,8 +373,37 @@ if __name__ == "__main__":
             pass 
 
     # run model on continuum
-    result_t, result_a, spent_time = life_experience(
+    result_t, result_a, spent_time, mistakes_t = life_experience(
         model, continuum, x_te, args)
+
+    # Jon:
+    # Visualize the evolution of the priorities
+    visualize_priorities(model.priority_tracker)
+
+    # Visualize the class mistakes as a histogram
+    # after training is completed.
+    mistakes_histogram(mistakes_t)
+
+    # Test this saliency shit on two data points
+    # From the final task train set
+    x = x_tr[-1][1][0:4]
+    y = x_tr[-1][2][0:4]
+    saliency = compute_saliency_maps(x, y, model)
+    # Convert the saliency map from Torch Tensor to numpy array and show images
+    # and saliency maps together.
+    saliency = saliency.detach().numpy()
+    saliency = saliency.reshape(-1, 28, 28)
+    x = x.reshape(-1, 28, 28).detach().numpy()
+    N = x.shape[0]
+    for i in range(N):
+        plt.subplot(2, N, i+1)
+        plt.imshow(x[i])
+        plt.axis('off')
+        plt.subplot(2, N, N + i + 1)
+        plt.imshow(saliency[i], cmap=plt.cm.hot)
+        plt.axis('off')
+        plt.gcf().set_size_inches(12, 5)
+    plt.show()
 
     # prepare saving path and file name
     if not os.path.exists(args.save_path):

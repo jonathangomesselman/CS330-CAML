@@ -48,6 +48,12 @@ class Net(nn.Module):
         # Woody
         self.caml_priority = args.caml_priority
         self.priorities = [] # This list should mirror the buffer self.M with the priority at each index
+
+        # Jon
+        # Let us track how the priorities are changing and looking. We basically want
+        # to generate some curves to just see how the priorities in the replay buffer
+        # are evolving!
+        self.priority_tracker = []
         
         # handle gpus if specified
         self.cuda = args.cuda
@@ -63,6 +69,24 @@ class Net(nn.Module):
     def softmax(self, logits, temperature=1.0):
         return softmax(np.asarray(logits) / temperature) # as temperature increases, the distribution of softmax becomes more uniform
 
+    """
+        Compute the probability distribution P over the prioritized
+        replay buffer. Also compute the importance weights.
+        Note: For now the importance weighting does not work really at all!!
+    """
+    # alpha = 0.7 was some hyperparamter set in DQN
+    def dqn_stochastic_sampling(self, priorities, alpha=0.6, beta=1):
+        # Probability of sampling transition i:
+        #   - P(i) = pi^(alpha) / sum(pk^(alpha))
+        priority_powers = np.asarray(priorities) ** alpha
+        probabilities = priority_powers / np.sum(priority_powers)
+        # Compute the importance weights as:
+        #   - wi (1 / len(priorities) * 1 / P(i))^(beta)
+        # DOES NOT DO WELL MAY LOOK INTO LATER!
+        importance_weights = (1./len(priorities) * 1. / probabilities) ** beta
+        return probabilities#, importance_weights
+
+
     def getBatch(self,x,y,t):
         xi = Variable(torch.from_numpy(np.array(x))).float().view(1,-1)
         yi = Variable(torch.from_numpy(np.array(y))).long().view(1)
@@ -71,6 +95,9 @@ class Net(nn.Module):
             yi = yi.cuda()
         bxs = [xi]
         bys = [yi]
+        # If using importance weights!
+        # DOES NOT WORK NOW!
+        #importance_weights_selected = [0] # Save this for the later setting idx[0] = max weight
         
         # Woody: add indices_sampled as a variable that keeps track of all the indices of examples in the buffer that were sampled
         indices_sampled = []
@@ -79,7 +106,8 @@ class Net(nn.Module):
             osize = min(self.batchSize,len(self.M))
 
             # Woody: prioritized sampling
-            curr_probabilities = self.softmax(self.priorities)
+            #curr_probabilities = self.softmax(self.priorities)
+            curr_probabilities = self.dqn_stochastic_sampling(self.priorities)
             #print(curr_probabilities)
             for j in range(0,osize):
                 # Old uniform sampling code
@@ -87,8 +115,11 @@ class Net(nn.Module):
                 #k = order[j]
 
                 # Woody: prioritized sampling
+                # Jon: Should we set replace = true?
                 k = np.random.choice(np.arange(len(self.M)), replace=False, p=curr_probabilities) # a single index drawn from the curr_probabilities distribution
                 indices_sampled.append(k)
+                # Only if using importance weighting
+                #importance_weights_selected.append(importance_weights[k])
 
                 x,y,t = self.M[k]
                 xi = Variable(torch.from_numpy(np.array(x))).float().view(1,-1)
@@ -99,7 +130,10 @@ class Net(nn.Module):
                     yi = yi.cuda()
                 bxs.append(xi)
                 bys.append(yi)
-        return bxs, bys, indices_sampled
+        # Note exclude importance weights in future.
+        # Include the max importance weight for the current train example index 0
+        # importance_weights_selected[0] = max(importance_weights_selected)
+        return bxs, bys, indices_sampled #, importance_weights_selected
                 
 
     def observe(self, x, t, y):
@@ -115,13 +149,14 @@ class Net(nn.Module):
                 weights_before = deepcopy(self.net.state_dict())
                 # Draw batch from buffer:
                 bxs, bys, indices_sampled = self.getBatch(xi,yi,t)
+
                 loss = 0.0
                 for idx in range(len(bxs)):
                     self.net.zero_grad()
                     bx = bxs[idx]
                     by = bys[idx] 
                     prediction = self.forward(bx,0)
-                    loss = self.bce(prediction,by)
+                    loss = self.bce(prediction, by)
 
                     if idx != 0: # skip the idx of the current xi and yi since they are not from the replay buffer
                         # Update replay buffer priority
@@ -132,6 +167,9 @@ class Net(nn.Module):
                             self.priorities[curr_replay_buffer_idx] = self.age
                         elif self.caml_priority == 'oldest':
                             self.priorities[curr_replay_buffer_idx] = -self.age 
+                        #elif self.priorities == 'loss+old':
+                            #sum_old
+                            #self.priorities[curr_replay_buffer_idx] = (1-alpha) * float(loss) / 
 
                     loss.backward()
                     self.opt.step()
@@ -156,29 +194,41 @@ class Net(nn.Module):
                     prediction = self.forward(curr_x, 0)
                     current_example_loss = self.bce(prediction, curr_y)
 
-            # Reservoir sampling memory update: 
+            # Reservoir sampling memory update: gives a random sample
+            # of what we have seen up till now 
             if len(self.M) < self.memories:
                 self.M.append([xi,yi,t])
 
                 # Woody: update priorities
                 if self.caml_priority == 'loss':
-                    self.priorities.append(current_example_loss)
+                    self.priorities.append(current_example_loss.item())
                 elif self.caml_priority == 'newest':
                     self.priorities.append(self.age)
                 elif self.caml_priority == 'oldest':
                     self.priorities.append(-self.age)
 
             else:
-                p = random.randint(0,self.age)
+                # Save these set of priorities to do some visualization on
+                #self.priority_tracker.append(self.priorities.copy())
+
+                # Jon: should we not do some sort of priority based removal like through a heap?
+                p = random.randint(0,self.age) 
                 if p < self.memories:
                     self.M[p] = [xi,yi,t]
 
                     # Woody update priorities
                     if self.caml_priority == 'loss':
-                        self.priorities[p] = current_example_loss
+                        #print ("adding new memory:", current_example_loss.item())
+                        copy = self.priorities.copy()
+                        self.priorities[p] = current_example_loss.item()
+                        #print (np.linalg.norm(np.array(copy) - np.array(self.priorities)))
                     elif self.caml_priority == 'newest':
                         self.priorities[p] = self.age
                     elif self.caml_priority == 'oldest':
                         self.priorities[p] = -self.age
+
+        #self.priority_tracker.append(self.priorities.copy())
+                
+
 
 
