@@ -47,7 +47,10 @@ class Net(nn.Module):
 
         # Woody
         self.caml_priority = args.caml_priority
+        if self.caml_priority == 'dynamic':
+            self.dynamic_alpha = 0.05
         self.priorities = [] # This list should mirror the buffer self.M with the priority at each index
+        self.temperature = args.softmax_temperature
 
         # Jon
         # Let us track how the priorities are changing and looking. We basically want
@@ -106,8 +109,8 @@ class Net(nn.Module):
             osize = min(self.batchSize,len(self.M))
 
             # Woody: prioritized sampling
-            #curr_probabilities = self.softmax(self.priorities)
-            curr_probabilities = self.dqn_stochastic_sampling(self.priorities)
+            curr_probabilities = self.softmax(self.priorities, temperature=self.temperature)
+            #curr_probabilities = self.dqn_stochastic_sampling(self.priorities)
             #print(curr_probabilities)
             for j in range(0,osize):
                 # Old uniform sampling code
@@ -166,13 +169,20 @@ class Net(nn.Module):
                         elif self.caml_priority == 'newest':
                             self.priorities[curr_replay_buffer_idx] = self.age
                         elif self.caml_priority == 'oldest':
-                            self.priorities[curr_replay_buffer_idx] = -self.age 
+                            self.priorities[curr_replay_buffer_idx] = -self.age
+                        elif self.caml_priority == 'dynamic': 
+                            self.priorities[curr_replay_buffer_idx] = float(loss)
+                            #self.priorities[curr_replay_buffer_idx] = float(loss) + (self.dynamic_alpha * -self.age)
                         #elif self.priorities == 'loss+old':
                             #sum_old
                             #self.priorities[curr_replay_buffer_idx] = (1-alpha) * float(loss) / 
 
                     loss.backward()
                     self.opt.step()
+
+                # If using dynamic prioritization, add one to all priority of all examples in the replay buffer
+                if self.caml_priority == 'dynamic':
+                    self.priorities = list(np.asarray(self.priorities) + self.dynamic_alpha)
                 
                 weights_after = self.net.state_dict()
                 
@@ -206,6 +216,9 @@ class Net(nn.Module):
                     self.priorities.append(self.age)
                 elif self.caml_priority == 'oldest':
                     self.priorities.append(-self.age)
+                elif self.caml_priority == 'dynamic': 
+                    self.priorities.append(float(loss))
+                    #self.priorities.append(float(loss) + (self.dynamic_alpha * -self.age))
 
             else:
                 # Save these set of priorities to do some visualization on
@@ -226,6 +239,9 @@ class Net(nn.Module):
                         self.priorities[p] = self.age
                     elif self.caml_priority == 'oldest':
                         self.priorities[p] = -self.age
+                    elif self.caml_priority == 'dynamic': 
+                        self.priorities[p] = float(loss)
+                        #self.priorities[p] = float(loss) + (self.dynamic_alpha * -self.age)
 
         #self.priority_tracker.append(self.priorities.copy())
                 
