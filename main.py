@@ -235,6 +235,8 @@ if __name__ == "__main__":
     # model details
     parser.add_argument('--model', type=str, default='single',
                         help='model to train')
+    parser.add_argument('--model_type', type=str, default='CNN',
+                        help='Model type used!')
     parser.add_argument('--n_hiddens', type=int, default=100,
                         help='number of hidden neurons at each layer')
     parser.add_argument('--n_layers', type=int, default=2,

@@ -28,7 +28,28 @@ class Net(nn.Module):
         
         nl, nh = args.n_layers, args.n_hiddens
         
+        # We should see about trying to do a conv net!
+        if (args.model_type == "CNN"):
+            self.features = nn.Sequential(
+                nn.Conv2d(1, 32, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2, stride=2),
+                nn.Conv2d(32, 64, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(64, 64, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=2, stride=2),
+            )
+            self.classifier = nn.Sequential(
+                # Need to calculate this!
+                nn.Linear(7 * 7 * 64, 100),
+                nn.ReLU(inplace=True),
+                nn.Linear(100, n_outputs),
+            )
+
         self.net = MLP([n_inputs] + [nh] * nl + [n_outputs])
+
+        self.model_type = args.model_type
 
         self.bce = CrossEntropyLoss()
         self.n_outputs = n_outputs
@@ -62,10 +83,20 @@ class Net(nn.Module):
         self.cuda = args.cuda
         if self.cuda:
             self.net = self.net.cuda()
+            if args.model_type == "CNN":
+                self.features = self.features.cuda()
+                self.classifier = self.classifier.cuda()
 
 
     def forward(self, x, t):
-        output = self.net(x)
+        if self.model_type == "CNN":
+            x = x.view(-1, 28, 28) # Check this!
+            x = x.unsqueeze(1) # Add the channel dim
+            x = self.features(x)
+            x = torch.flatten(x, 1)
+            output = self.classifier(x)
+        else:
+            output = self.net(x)
         return output
 
     # Woody: added this softmax function with temperature
@@ -145,7 +176,13 @@ class Net(nn.Module):
             self.age += 1
             xi = x[i].data.cpu().numpy()
             yi = y[i].data.cpu().numpy()
-            self.net.zero_grad()
+
+            # Odd that we are not doing zero grad for the optimizer but okay
+            if (self.model_type == 'CNN'):
+                self.features.zero_grad()
+                self.classifier.zero_grad()
+            else:
+                self.net.zero_grad()
 
             before = deepcopy(self.net.state_dict())
             for step in range(0,self.steps):                
@@ -155,7 +192,13 @@ class Net(nn.Module):
 
                 loss = 0.0
                 for idx in range(len(bxs)):
-                    self.net.zero_grad()
+                    # Odd that we are not doing zero grad for the optimizer but okay
+                    if (self.model_type == 'CNN'):
+                        self.features.zero_grad()
+                        self.classifier.zero_grad()
+                    else:
+                        self.net.zero_grad()
+                    
                     bx = bxs[idx]
                     by = bys[idx] 
                     prediction = self.forward(bx,0)
