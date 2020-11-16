@@ -108,51 +108,8 @@ class Continuum:
 
 # train handle ###############################################################
 
-"""
-    Stolen from CS231N
-"""
-def compute_saliency_maps(X, y, model):
-    """
-    Compute a class saliency map using the model for images X and labels y.
 
-    Input:
-    - X: Input images; Tensor of shape (N, H*W)
-    - y: Labels for X; LongTensor of shape (N,)
-    - model: A pretrained CNN that will be used to compute the saliency map.
-
-    Returns:
-    - saliency: A Tensor of shape (N, H*W) giving the saliency maps for the input
-    images.
-    """
-    # Make sure the model is in "test" mode
-    model.eval()
-    
-    # Make input tensor require gradient
-    X.requires_grad_()
-    
-    ##############################################################################
-    # TODO: Implement this function. Perform a forward and backward pass through #
-    # the model to compute the gradient of the correct class score with respect  #
-    # to each input image. You first want to compute the loss over the correct   #
-    # scores (we'll combine losses across a batch by summing), and then compute  #
-    # the gradients with a backward pass.                                        #
-    ##############################################################################
-    # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
-
-    scores = model(X, 0) # Not sure about the 0
-    # loss = self.bce(prediction, by)
-    # Gather just the correct scores
-    # Not sure why we did this instead of the loss!
-    scores = scores.gather(1, y.view(-1, 1),).squeeze()
-    loss = torch.sum(scores)
-    
-    loss.backward()
-    # Now actually get step
-    X_grad = X.grad
-    saliency = torch.abs(X_grad)
-    return saliency
-
-def eval_tasks(model, tasks, args, current_task):
+def eval_tasks(model, tasks, args, current_task, mistake_type="current"):
     model.eval()
     result = []
     mistakes = np.zeros(0)
@@ -182,7 +139,8 @@ def eval_tasks(model, tasks, args, current_task):
 
                 # Track the numbers that are incorrectly predicted
                 # Only track for tasks we has learned on!
-                if (t <= current_task):
+                #if (t <= current_task):
+                if (mistake_type == "current" and current_task == t):
                     gt_wrong = yb[pb != yb].detach().numpy()
                     mistakes = np.concatenate((mistakes, gt_wrong), axis=-1)
 
@@ -383,27 +341,6 @@ if __name__ == "__main__":
     # Visualize the class mistakes as a histogram
     # after training is completed.
     mistakes_histogram(mistakes_t)
-
-    # Test this saliency shit on two data points
-    # From the final task train set
-    x = x_tr[-1][1][0:4]
-    y = x_tr[-1][2][0:4]
-    saliency = compute_saliency_maps(x, y, model)
-    # Convert the saliency map from Torch Tensor to numpy array and show images
-    # and saliency maps together.
-    saliency = saliency.detach().numpy()
-    saliency = saliency.reshape(-1, 28, 28)
-    x = x.reshape(-1, 28, 28).detach().numpy()
-    N = x.shape[0]
-    for i in range(N):
-        plt.subplot(2, N, i+1)
-        plt.imshow(x[i])
-        plt.axis('off')
-        plt.subplot(2, N, N + i + 1)
-        plt.imshow(saliency[i], cmap=plt.cm.hot)
-        plt.axis('off')
-        plt.gcf().set_size_inches(12, 5)
-    plt.show()
 
     # prepare saving path and file name
     if not os.path.exists(args.save_path):

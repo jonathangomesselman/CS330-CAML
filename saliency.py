@@ -15,27 +15,37 @@ import matplotlib.pyplot as plt
 
 from main import load_datasets
 
+# Import saliency methods
+#from fullgrad_saliency_master.saliency.fullgrad import FullGrad
+#from fullgrad_saliency_master.saliency.simple_fullgrad import SimpleFullGrad
+#from fullgrad_saliency_master.saliency.smooth_fullgrad import SmoothFullGrad
+
+from fullgrad_saliency_master.saliency.gradcam import GradCAM
+from fullgrad_saliency_master.saliency.grad import InputGradient
+from fullgrad_saliency_master.saliency.smoothgrad import SmoothGrad
+
+
 """
     Stolen from CS231N
 """
-def compute_saliency_maps(X, y, model):
+def compute_saliency_maps(x, y, model):
     """
     Compute a class saliency map using the model for images X and labels y.
 
     Input:
-    - X: Input images; Tensor of shape (N, H*W)
-    - y: Labels for X; LongTensor of shape (N,)
+    - x: Input image: Tensor of shape(H*W)
+    - y: Labels for x; float label
     - model: A pretrained CNN that will be used to compute the saliency map.
 
     Returns:
-    - saliency: A Tensor of shape (N, H*W) giving the saliency maps for the input
+    - saliency: A Tensor of shape (H*W) giving the saliency maps for the input
     images.
     """
     # Make sure the model is in "test" mode
     model.eval()
     
     # Make input tensor require gradient
-    X.requires_grad_()
+    x.requires_grad_()
     
     ##############################################################################
     # TODO: Implement this function. Perform a forward and backward pass through #
@@ -46,17 +56,17 @@ def compute_saliency_maps(X, y, model):
     ##############################################################################
     # *****START OF YOUR CODE (DO NOT DELETE/MODIFY THIS LINE)*****
 
-    scores = model(X, 0) # Not sure about the 0
-    # loss = self.bce(prediction, by)
+    scores = model(x, 0) # Not sure about the 0
+
     # Gather just the correct scores
     # Not sure why we did this instead of the loss!
-    scores = scores.gather(1, y.view(-1, 1),).squeeze()
+    scores = scores.gather(0, y,).squeeze()
     loss = torch.sum(scores)
     
     loss.backward()
     # Now actually get step
-    X_grad = X.grad
-    saliency = torch.abs(X_grad)
+    x_grad = x.grad
+    saliency = torch.abs(x_grad)
     return saliency
 
 def main():
@@ -68,7 +78,7 @@ def main():
                         help='temperature for softmax in replay buffer sampling')
 
     # model details
-    parser.add_argument('--model', type=str, default='single',
+    parser.add_argument('--model', type=str, default='caml1',
                         help='model to train')
     parser.add_argument('--n_hiddens', type=int, default=100,
                         help='number of hidden neurons at each layer')
@@ -121,12 +131,16 @@ def main():
     # data parameters
     parser.add_argument('--data_path', default='data/',
                         help='path where data is located')
-    parser.add_argument('--data_file', default='mnist_permutations.pt',
+    parser.add_argument('--data_file', default='mnist_rotations.pt',
                         help='data file')
     parser.add_argument('--samples_per_task', type=int, default=-1,
                         help='training samples per task (all if negative)')
     parser.add_argument('--shuffle_tasks', type=str, default='no',
                         help='present tasks in order')
+
+    # Saliency method
+    parser.add_argument('--saliency', type=str, default='smoothgrad',
+        help="Defines the saliency method used")
 
     args = parser.parse_args()
     args.cuda = True if args.cuda == 'yes' else False
@@ -155,8 +169,8 @@ def main():
     Model = importlib.import_module('model.' + args.model)
     model = Model.Net(n_inputs, n_outputs, n_tasks, args)
 
-    result_t, result_a, model_state_dict, stats, one_liner, args = torch.load('woody_results/online_mnist_rotations.pt_2020_11_01_11_19_37_f37e2305e6e04d61ab498c9bf252fe97.pt')
-    #result_t, result_a, model_state_dict, stats, one_liner, args = torch.load('woody_results/caml1_mnist_rotations.pt_2020_11_01_13_58_46_0c7287daad494c818e6d5ce206b16b0b.pt')
+    #result_t, result_a, model_state_dict, stats, one_liner, _ = torch.load('woody_results/online_mnist_rotations.pt_2020_11_01_11_19_37_f37e2305e6e04d61ab498c9bf252fe97.pt')
+    result_t, result_a, model_state_dict, stats, one_liner, _ = torch.load('woody_results/caml1_mnist_rotations.pt_2020_11_01_13_58_46_0c7287daad494c818e6d5ce206b16b0b.pt')
     model.load_state_dict(model_state_dict)
     model.eval()
     
@@ -166,17 +180,37 @@ def main():
         except:
             pass 
 
+    # Initialize saliency methods
+    saliency_methods = {
+        # FullGrad-based methods
+        #'fullgrad': FullGrad(model),
+        #'simple_fullgrad': SimpleFullGrad(model),
+        #'smooth_fullgrad': SmoothFullGrad(model),
+
+        # Other saliency methods from literature
+        'gradcam': GradCAM(model),
+        'inputgrad': InputGradient(model),
+        'smoothgrad': SmoothGrad(model)
+    }
+
     # Test this saliency shit on two data points
     # From the final task train set
     task_num = 0
     saliency_idxes = [7, 1, 105]
-    x = x_tr[task_num][1][saliency_idxes]
-    y = x_tr[task_num][2][saliency_idxes]
+    #x = x_tr[task_num][1][saliency_idxes]
+    #y = x_tr[task_num][2][saliency_idxes]
+    x = x_tr[task_num][1][1]
+    y = x_tr[task_num][2][1]
 
-    saliency = compute_saliency_maps(x, y, model)
+    #saliency = compute_saliency_maps(x, y, model)
+    saliency = saliency_methods[args.saliency].saliency(x, y)
+
+
     # Convert the saliency map from Torch Tensor to numpy array and show images
     # and saliency maps together.
     saliency = saliency.detach().numpy()
+    # Try the technique of multiplying the image and saliency!
+    #saliency = saliency * x.detach().numpy()
     saliency = saliency.reshape(-1, 28, 28)
     x = x.reshape(-1, 28, 28).detach().numpy()
     N = x.shape[0]
